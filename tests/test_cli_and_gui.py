@@ -1,5 +1,7 @@
 """CLI clean-exit behaviour and headless GUI import safety."""
 
+import pytest
+import sys
 import budgetbook.__main__ as cli
 from budgetbook import gui
 
@@ -32,12 +34,16 @@ def test_cli_report_writes_chart(tmp_path):
     assert os.path.getsize(png) > 0
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="Windows CI has a real display; main() would open a window and block")
 def test_gui_import_is_side_effect_free():
     # importing the module must not create a Tk root or require a display
     assert hasattr(gui, "main")
     assert callable(gui.main)
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="Windows CI has a real display; main() would open a window and block")
 def test_gui_main_headless_returns_zero(monkeypatch):
     # simulate a headless Linux box: no DISPLAY -> main() returns 0, not raise
     monkeypatch.delenv("DISPLAY", raising=False)

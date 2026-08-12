@@ -20,8 +20,10 @@ jobs:
           pyinstaller --onefile --windowed --name BudgetBook
           --icon budget-book.ico
           --version-file packaging/version.txt
+          --hidden-import budgetbook.__main__
           --add-data "budget-book.ico;."
           --collect-all matplotlib
+          --collect-all customtkinter
           budget_book_app.py
       - name: Stage installer inputs
         shell: pwsh
@@ -41,4 +43,10 @@ jobs:
           path: |
             dist/BudgetBook.exe
             packaging/dist/BudgetBook-Setup.exe
+          if-no-files-found: error
+      - name: Upload staging (for signed repack)
+        uses: actions/upload-artifact@v4
+        with:
+          name: budget-book-staging
+          path: packaging/staging
           if-no-files-found: error

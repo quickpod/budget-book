@@ -1,3 +1,5 @@
 # BudgetBook runtime deps — permissive/weak-copyleft only, no AGPL/proprietary.
 ofxparse>=0.21
 matplotlib>=3.8
+customtkinter>=5.2
+darkdetect>=0.8
