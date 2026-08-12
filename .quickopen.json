@@ -1,0 +1,13 @@
+{
+  "slug": "budget-book",
+  "name": "BudgetBook",
+  "tagline": "Personal finance \u2014 budgets, expense tracking, bank CSV/OFX import and charts.",
+  "categorySlug": "personal-finance",
+  "license": "Apache-2.0",
+  "description": "Track income and expenses, set category budgets, and import transactions from bank CSV or OFX/QFX files with auto-categorization rules. Visualize spending trends, cash flow and net worth with charts, and see budget-vs-actual at a glance. All data is stored locally \u2014 a private money manager.",
+  "aiStack": "Python (tkinter + CLI), ofxparse, matplotlib",
+  "platforms": [
+    "windows"
+  ],
+  "buildEntry": "budget_book_app.py"
+}
