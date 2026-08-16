@@ -1,0 +1,4 @@
+{
+  "tagline": "Offline personal finance — accounts sidebar, statement import, budgets, auto-categorization and themed charts",
+  "description": "BudgetBook keeps your money picture on your own computer: a YNAB-style accounts sidebar with live balances, a clean transaction register with payee search, month and category filters, and one-click cleared flags. Import bank statements (CSV or OFX/QFX) with automatic column detection and duplicate skipping, set per-category budgets and see budget-vs-actual instantly, auto-categorize with payee rules, and read spending, cash-flow and net-worth charts that follow your light/dark theme (and export as classic PNGs). Fresh installs follow the OS Aura theme live; Ctrl+, opens Settings. Nothing is ever uploaded anywhere. 100% AI-built and open source."
+}

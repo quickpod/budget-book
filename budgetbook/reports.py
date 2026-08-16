@@ -106,19 +106,39 @@ def net_worth(db):
 # ---------------------------------------------------------------------------
 # Chart rendering (Agg -> PNG)
 # ---------------------------------------------------------------------------
-def render_chart(kind, data, out_png, title=None):
+def render_chart(kind, data, out_png, title=None, theme=None):
     """Render *data* as a PNG at *out_png* and return the path.
 
     *kind* is one of ``spending`` (pie), ``cashflow`` (grouped bars of income
     vs expense per month), ``networth`` (line) or ``budget`` (horizontal
     budget-vs-actual bars).  *data* is the matching structure from this module
     (or :mod:`budgetbook.budget` for ``budget``).  Always uses the Agg backend.
+
+    ``theme`` may be ``"light"`` or ``"dark"`` to paint the figure in the Aura
+    palette so the chart never sits as an unthemed white rectangle inside the
+    GUI; ``None`` (the default) keeps the classic white look for exports and
+    existing callers.
     """
     import matplotlib.pyplot as plt  # safe: backend already forced to Agg
 
     parent = os.path.dirname(os.path.abspath(out_png))
     if parent and not os.path.isdir(parent):
         os.makedirs(parent, exist_ok=True)
+
+    if theme in ("light", "dark"):
+        dark = theme == "dark"
+        bg = "#14171c" if dark else "#ffffff"       # Aura surface tones
+        fg = "#e8ecf5" if dark else "#232838"
+        plt.rcParams.update({
+            "figure.facecolor": bg, "axes.facecolor": bg,
+            "savefig.facecolor": bg, "text.color": fg,
+            "axes.labelcolor": fg, "axes.edgecolor": fg,
+            "xtick.color": fg, "ytick.color": fg,
+            "legend.facecolor": bg, "legend.edgecolor": fg,
+        })
+    else:
+        plt.rcParams.update(plt.rcParamsDefault)
+        matplotlib.use("Agg")                        # keep the forced backend
 
     fig, ax = plt.subplots(figsize=(7.5, 4.5), dpi=100)
     try:

@@ -39,10 +39,11 @@ import threading
 # CI box) never fails and has no side effects.
 
 APP_NAME = "BudgetBook"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 WINDOW_TITLE = "BudgetBook — by QuickOpen (quickopen.ai)"
 PROJECT_URL = "https://quickopen.ai"
-ACCENT = "#17914b"      # UI-accent registry (aurakit README): budget-book
+ACCENT = "#5b86f7"      # Aura brand accent (the old per-app green was a
+                        # legacy scaffold accent)
 
 CSV_TYPES = [("CSV / OFX / QFX", "*.csv *.ofx *.qfx"), ("All files", "*.*")]
 PNG_TYPES = [("PNG image", "*.png"), ("All files", "*.*")]
@@ -53,7 +54,11 @@ SECTIONS = [
     ("budgets", "Budgets"),
     ("reports", "Reports"),
     ("rules", "Rules"),
+    ("about", "About"),
 ]
+
+REPORT_KINDS = [("Spending", "spending"), ("Cash flow", "cashflow"),
+                ("Net worth", "networth")]
 
 SECTION_DESC = {
     "transactions": "Add, edit, filter and clear transactions. Amounts are "
@@ -160,6 +165,7 @@ def build_app():
             self._img_refs_gui = []     # keep PhotoImage refs alive
             self._tmpdir = tempfile.mkdtemp(prefix="budgetbook_gui_")
             self._last_report = None    # (kind, data)
+            self._account = None        # sidebar account filter (None = all)
 
             self.db = Database(db_path or default_db_path())
 
@@ -171,6 +177,8 @@ def build_app():
             self.add_section("budgets", "Budgets", "◈", self._panel_budgets)
             self.add_section("reports", "Reports", "▤", self._panel_reports)
             self.add_section("rules", "Rules", "✎", self._panel_rules)
+            self.add_section("about", "About", "ℹ", self._panel_about)
+            self._build_accounts_sidebar()
             self.show("transactions")
             self.set_status("Ready")
             self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -200,17 +208,25 @@ def build_app():
             if refresh:
                 refresh()
 
-        # ---- menu (native menus stay; theme lives in the sidebar toggle too)
+        # ---- menu + keyboard baseline (APP-LAYOUT-LANGUAGE.md §7/§9)
         def _build_menu(self):
             bar = tk.Menu(self)
             filem = tk.Menu(bar, tearoff=0)
+            filem.add_command(label="Add transaction…", accelerator="Ctrl+N",
+                              command=lambda: (self.show("transactions"),
+                                               self._add_tx()))
             filem.add_command(label="Import statement…",
                               command=lambda: self.show("import"))
+            filem.add_separator()
+            filem.add_command(label="Settings…", accelerator="Ctrl+,",
+                              command=self._open_settings)
             filem.add_separator()
             filem.add_command(label="Exit", command=self._on_close)
             bar.add_cascade(label="File", menu=filem)
 
             viewm = tk.Menu(bar, tearoff=0)
+            viewm.add_command(label="Toggle sidebar", accelerator="Ctrl+\\",
+                              command=self.toggle_sidebar)
             viewm.add_command(
                 label="Toggle dark mode",
                 command=lambda: self.set_theme(
@@ -218,9 +234,135 @@ def build_app():
             bar.add_cascade(label="View", menu=viewm)
 
             helpm = tk.Menu(bar, tearoff=0)
-            helpm.add_command(label="About BudgetBook", command=self._about)
+            helpm.add_command(label="About BudgetBook",
+                              command=lambda: self.show("about"))
             bar.add_cascade(label="Help", menu=helpm)
             self.configure(menu=bar)
+
+            self.bind_all("<Control-n>",
+                          lambda e: (self.show("transactions"),
+                                     self._add_tx(), "break")[2])
+            self.bind_all("<Control-f>",
+                          lambda e: (self._focus_search(), "break")[1])
+            self.bind_all("<Control-comma>",
+                          lambda e: (self._open_settings(), "break")[1])
+
+        def _focus_search(self):
+            try:
+                self.show("transactions")
+                self.tx_search.focus_set()
+            except Exception:
+                pass
+
+        # =================================================================
+        # Sidebar library: accounts with balances (the YNAB convention)
+        # =================================================================
+        def _build_accounts_sidebar(self):
+            aura.SectionLabel(self.sidebar_body, "Accounts").pack(
+                anchor="w", padx=6, pady=(0, 4))
+            self._acct_scroll = ctk.CTkScrollableFrame(
+                self.sidebar_body, fg_color="transparent")
+            self._acct_scroll.pack(fill="both", expand=True)
+            self._refresh_accounts_sidebar()
+
+        def _acct_row(self, label, balance, account):
+            active = (account == self._account)
+            text = label if balance is None else \
+                "%s   ·  %.2f" % (label, balance)
+            btn = ctk.CTkButton(
+                self._acct_scroll, text=text, anchor="w", height=30,
+                corner_radius=aura.TOKENS["geometry"]["radius_button"],
+                fg_color=aura._pair("accent_soft") if active else "transparent",
+                hover_color=(aura._pal["light"]["surface2"],
+                             aura._pal["dark"]["surface2"]),
+                text_color=aura._pair("text") if active else aura._pair("muted"),
+                font=aura.font(role="body"),
+                command=lambda: self._set_account_filter(account))
+            btn.pack(fill="x", pady=1)
+            return btn
+
+        def _refresh_accounts_sidebar(self):
+            if not hasattr(self, "_acct_scroll"):
+                return
+            for w in list(self._acct_scroll.winfo_children()):
+                try:
+                    w.destroy()
+                except Exception:
+                    pass
+            try:
+                # accounts seen on transactions + explicitly created ones
+                names = {a["name"] for a in self.db.list_accounts()}
+                for t in self.db.list_transactions():
+                    if t["account"]:
+                        names.add(t["account"])
+            except BudgetBookError:
+                names = set()
+            self._acct_row("All accounts", None, None)
+            for name in sorted(names, key=str.lower):
+                try:
+                    txsum = sum(t["amount"]
+                                for t in self.db.list_transactions(account=name))
+                except BudgetBookError:
+                    txsum = 0.0
+                self._acct_row(name, txsum, name)
+            if self._account is not None and self._account not in names:
+                self._account = None
+
+        def _set_account_filter(self, account):
+            self._account = account
+            self._refresh_accounts_sidebar()
+            self.show("transactions")
+            self._refresh_transactions()
+
+        # ---- settings (Ctrl+,)
+        def _open_settings(self):
+            dlg = aura.Dialog(self, title="Settings", size=(520, 320))
+
+            aura.SectionLabel(dlg.body, "Appearance").pack(anchor="w",
+                                                           pady=(0, 2))
+            trow = ctk.CTkFrame(dlg.body, fg_color="transparent")
+            trow.pack(anchor="w", pady=(4, 2))
+            aura.Caption(trow, "Theme").pack(side="left", padx=(0, 10))
+            cur = guiconfig.get_theme()
+            th = aura.AuraOption(trow, values=["System", "Light", "Dark"],
+                                 width=110, height=30,
+                                 command=self._set_theme_pref)
+            th.set(cur.capitalize() if cur in ("light", "dark") else "System")
+            th.pack(side="left")
+            aura.Caption(dlg.body,
+                         "System follows the OS Aura Dark/Light live.").pack(
+                anchor="w", pady=(0, 14))
+
+            aura.SectionLabel(dlg.body, "Data").pack(anchor="w", pady=(0, 2))
+            aura.Caption(dlg.body, str(self.db.path)).pack(anchor="w")
+            drow = ctk.CTkFrame(dlg.body, fg_color="transparent")
+            drow.pack(anchor="w", pady=(6, 0))
+            aura.AuraButton(drow, "Open data folder", kind="ghost", height=30,
+                            command=lambda: open_in_file_manager(
+                                str(self.db.path))).pack(side="left")
+
+            dlg.add_button("Close")
+
+        def _set_theme_pref(self, choice):
+            pref = str(choice).lower()
+            if pref == "system":
+                guiconfig.set_theme("system")
+                self._follow_system = True
+                if self._sys_listener is None:
+                    self._start_system_listener()
+                self.set_theme(aura._system_theme(), _system=True)
+            elif pref in ("light", "dark"):
+                self.set_theme(pref)     # persists via on_theme_change
+
+        # ---- theme: keep sidebar rows + amount tags in sync
+        def set_theme(self, theme, _system=False):
+            super().set_theme(theme, _system=_system)
+            try:
+                self._refresh_accounts_sidebar()
+                if self._last_report and not self._busy:
+                    self._report(self._last_report[0])
+            except Exception:
+                pass
 
         # ---- shared section header (caption under the Aura page title)
         def _desc(self, parent, sid):
@@ -272,78 +414,132 @@ def build_app():
         # SECTION: Transactions
         # =================================================================
         def _panel_transactions(self, parent):
-            self._desc(parent, "transactions")
-            filt = ctk.CTkFrame(parent, fg_color="transparent")
-            filt.pack(fill="x", pady=(0, 10))
-            self.tx_month = aura.AuraEntry(filt, placeholder="Month YYYY-MM",
-                                           width=130)
-            self.tx_month.pack(side="left", padx=(0, 8))
-            self.tx_cat_filter = aura.AuraCombo(filt, width=170,
-                                                state="readonly", values=[""])
-            self.tx_cat_filter.set("")
-            self.tx_cat_filter.pack(side="left", padx=(0, 8))
-            aura.AuraButton(filt, "Apply filter", kind="secondary",
-                            command=self._refresh_transactions).pack(
-                side="left", padx=(0, 8))
-            aura.AuraButton(filt, "Clear", kind="ghost",
-                            command=self._clear_tx_filter).pack(side="left")
+            parent.grid_columnconfigure(0, weight=1)
+            parent.grid_rowconfigure(1, weight=1)
 
-            body = ctk.CTkFrame(parent, fg_color="transparent")
-            body.pack(fill="both", expand=True)
-            cols = ("id", "date", "amount", "category", "account", "cleared",
-                    "payee")
-            self.tx_tree = ttk.Treeview(body, columns=cols, show="headings",
-                                        selectmode="browse", height=8)
-            for c, w, anchor in (("id", 46, "e"), ("date", 92, "w"),
-                                 ("amount", 96, "e"), ("category", 120, "w"),
-                                 ("account", 110, "w"), ("cleared", 82, "center"),
-                                 ("payee", 240, "w")):
-                self.tx_tree.heading(c, text=aura.spaced(c.title()), anchor="w")
-                self.tx_tree.column(c, width=w, anchor=anchor)
-            sb = ttk.Scrollbar(body, orient="vertical",
-                               command=self.tx_tree.yview)
+            tb = aura.Toolbar(parent)
+            tb.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+            tb.add_button("＋ Add", self._add_tx, kind="primary")
+            tb.add_button("Edit…", self._edit_tx,
+                          tooltip="Edit the selected transaction (F2)")
+            self.tx_search = tb.add_search("Search payee…",
+                                           on_change=lambda _t:
+                                           self._refresh_transactions(),
+                                           width=150)
+            self.tx_month = aura.AuraEntry(tb, placeholder="YYYY-MM",
+                                           width=82, height=32)
+            self.tx_month.bind("<Return>",
+                               lambda e: self._refresh_transactions())
+            tb.add_right(self.tx_month)
+            self.tx_cat_filter = aura.AuraOption(
+                tb, values=["All categories"], width=130, height=32,
+                command=lambda _v: self._refresh_transactions())
+            self.tx_cat_filter.set("All categories")
+            tb.add_right(self.tx_cat_filter)
+
+            wrap = ctk.CTkFrame(parent, fg_color=aura._pair("surface"),
+                                corner_radius=10, border_width=1,
+                                border_color=aura._pair("border"))
+            wrap.grid(row=1, column=0, sticky="nsew")
+            self._tx_wrap = wrap
+            cols = ("date", "payee", "category", "account", "amount",
+                    "cleared")
+            self.tx_tree = ttk.Treeview(wrap, columns=cols, show="headings",
+                                        selectmode="browse")
+            for c, label, w, anchor, stretch in (
+                    ("date", "Date", 100, "w", False),
+                    ("payee", "Payee", 240, "w", True),
+                    ("category", "Category", 130, "w", False),
+                    ("account", "Account", 110, "w", False),
+                    ("amount", "Amount", 96, "e", False),
+                    ("cleared", "✓", 40, "center", False)):
+                self.tx_tree.heading(c, text=label, anchor="w")
+                self.tx_tree.column(c, width=w, anchor=anchor,
+                                    stretch=stretch)
+            sb = aura.AuraScrollbar(wrap, command=self.tx_tree.yview)
             self.tx_tree.configure(yscrollcommand=sb.set)
-            sb.pack(side="right", fill="y")
-            self.tx_tree.pack(side="left", fill="both", expand=True)
+            sb.pack(side="right", fill="y", padx=(0, 4), pady=6)
+            self.tx_tree.pack(side="left", fill="both", expand=True,
+                              padx=(6, 0), pady=6)
             self.tx_tree.bind("<Double-1>", lambda e: self._edit_tx())
+            self.tx_tree.bind("<Delete>", lambda e: self._delete_tx())
+            self.tx_tree.bind("<F2>", lambda e: self._edit_tx())
+            self.tx_tree.bind("<Button-3>", self._show_tx_menu)
+            self._tx_menu = tk.Menu(self, tearoff=0)
+            aura.track(self._tx_menu, "menu")
 
-            btns = ctk.CTkFrame(parent, fg_color="transparent")
-            btns.pack(fill="x", pady=(10, 0))
-            aura.AuraButton(btns, "Add…", kind="primary",
-                            command=self._add_tx).pack(side="left")
-            aura.AuraButton(btns, "Edit…", kind="secondary",
-                            command=self._edit_tx).pack(side="left", padx=8)
-            aura.AuraButton(btns, "Toggle cleared", kind="secondary",
-                            command=self._toggle_cleared).pack(side="left")
-            aura.AuraButton(btns, "Delete", kind="danger",
-                            command=self._delete_tx).pack(side="left", padx=8)
+            self.empty_tx = aura.EmptyState(
+                parent, title="No transactions yet",
+                caption="Import a bank statement (CSV or OFX/QFX) or add "
+                        "your first transaction — expenses negative, income "
+                        "positive.",
+                action_text="↧ Import a statement",
+                action=lambda: self.show("import"),
+                image=(asset_path("assets/money-empty-light.png"),
+                       asset_path("assets/money-empty-dark.png")))
 
-        def _clear_tx_filter(self):
-            self.tx_month.delete(0, "end")
-            self.tx_cat_filter.set("")
-            self._refresh_transactions()
+        def _show_tx_menu(self, event):
+            iid = self.tx_tree.identify_row(event.y)
+            if not iid:
+                return
+            self.tx_tree.selection_set(iid)
+            m = self._tx_menu
+            m.delete(0, "end")
+            m.add_command(label="Edit…  (F2)", command=self._edit_tx)
+            m.add_command(label="Toggle cleared",
+                          command=self._toggle_cleared)
+            m.add_separator()
+            m.add_command(label="Delete  (Del)", command=self._delete_tx)
+            aura.style_menu(m)
+            try:
+                m.tk_popup(event.x_root, event.y_root)
+            finally:
+                try:
+                    m.grab_release()
+                except Exception:
+                    pass
 
         def _refresh_transactions(self):
             if not hasattr(self, "tx_tree"):
                 return
-            cats = [""] + self.db.category_names()
+            cats = ["All categories"] + self.db.category_names()
             self.tx_cat_filter.configure(values=cats)
             month = self.tx_month.get().strip() or None
-            cat = self.tx_cat_filter.get().strip() or None
+            cat = self.tx_cat_filter.get().strip()
+            cat = None if cat in ("", "All categories") else cat
+            query = self.tx_search.get().strip().lower() \
+                if hasattr(self, "tx_search") else ""
             for row in self.tx_tree.get_children():
                 self.tx_tree.delete(row)
             try:
-                txns = self.db.list_transactions(month=month, category=cat)
+                txns = self.db.list_transactions(month=month, category=cat,
+                                                 account=self._account)
+                has_any = bool(self.db.list_transactions())
             except BudgetBookError as ex:
                 self.set_error(str(ex))
                 return
+            if query:
+                txns = [t for t in txns if query in (t["payee"] or "").lower()
+                        or query in (t["notes"] or "").lower()]
             for t in txns:
                 self.tx_tree.insert(
                     "", "end", iid=str(t["id"]),
-                    values=(t["id"], t["date"], f"{t['amount']:.2f}",
-                            t["category"] or "-", t["account"] or "-",
-                            "✓" if t["cleared"] else "", t["payee"]))
-            self.set_success(f"{len(txns)} transaction(s).")
+                    values=(t["date"], t["payee"], t["category"] or "-",
+                            t["account"] or "-", f"{t['amount']:.2f}",
+                            "✓" if t["cleared"] else ""))
+            if has_any:
+                self.empty_tx.place_forget()
+                self._tx_wrap.grid()
+            else:
+                self._tx_wrap.grid_remove()
+                self.empty_tx.place(relx=0, rely=0.08, relwidth=1,
+                                    relheight=0.9)
+                self.empty_tx.lift()
+            total = sum(t["amount"] for t in txns)
+            scope = self._account or "all accounts"
+            self.set_status(f"{len(txns)} transaction(s) in {scope}"
+                            f"   ·   net {total:+.2f}")
+            self._refresh_accounts_sidebar()
 
         def _selected_tx_id(self):
             sel = self.tx_tree.selection()
@@ -618,9 +814,11 @@ def build_app():
                 self.bud_tree.insert("", "end",
                     values=(r["category"], f"{r['actual']:.2f}", lim, rem, status))
 
+            theme = self.theme
+
             def work():
                 out = os.path.join(self._tmpdir, "budget.png")
-                return reports.render_chart("budget", rows, out)
+                return reports.render_chart("budget", rows, out, theme=theme)
 
             def done(png):
                 self._show_chart(self.bud_canvas, png)
@@ -634,27 +832,38 @@ def build_app():
         # SECTION: Reports
         # =================================================================
         def _panel_reports(self, parent):
-            self._desc(parent, "reports")
-            row = ctk.CTkFrame(parent, fg_color="transparent")
-            row.pack(fill="x")
-            aura.AuraButton(row, "Spending (pie)", kind="secondary",
-                            command=lambda: self._report("spending")).pack(
-                side="left")
-            aura.AuraButton(row, "Cash flow (bars)", kind="secondary",
-                            command=lambda: self._report("cashflow")).pack(
-                side="left", padx=8)
-            aura.AuraButton(row, "Net worth (line)", kind="secondary",
-                            command=lambda: self._report("networth")).pack(
-                side="left")
-            self.rep_month = aura.AuraEntry(row, placeholder="YYYY-MM",
-                                            width=100)
-            self.rep_month.pack(side="left", padx=(12, 0))
-            aura.AuraButton(row, "Export PNG…", kind="ghost",
-                            command=self._export_report).pack(side="right")
+            parent.grid_columnconfigure(0, weight=1)
+            parent.grid_rowconfigure(1, weight=1)
+            tb = aura.Toolbar(parent)
+            tb.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+            self.rep_seg = aura.SegmentedControl(
+                tb, values=[lbl for lbl, _k in REPORT_KINDS], width=300,
+                command=lambda _v: self._report_from_seg())
+            self.rep_seg.set(REPORT_KINDS[0][0])
+            tb.add(self.rep_seg)
+            self.rep_month = aura.AuraEntry(tb, placeholder="YYYY-MM",
+                                            width=90, height=32)
+            self.rep_month.bind("<Return>", lambda e: self._report_from_seg())
+            tb.add(self.rep_month)
+            tb.add_right(aura.AuraButton(tb, "Export PNG…", kind="ghost",
+                                         height=32,
+                                         command=self._export_report))
 
             self.rep_canvas = tk.Label(parent, bd=0, text="")
-            self.rep_canvas.pack(fill="both", expand=True, pady=(10, 0))
+            self.rep_canvas.grid(row=1, column=0, sticky="nsew")
             aura.track(self.rep_canvas, "canvas")
+
+        def _report_from_seg(self):
+            label = self.rep_seg.get()
+            for lbl, kind in REPORT_KINDS:
+                if lbl == label:
+                    self._report(kind)
+                    return
+
+        def _refresh_reports(self):
+            # auto-render the selected chart when the section shows
+            if not self._busy and not self._last_report:
+                self._report_from_seg()
 
         def _report(self, kind):
             month = self.rep_month.get().strip() or None
@@ -671,9 +880,11 @@ def build_app():
                 self.set_error(str(ex))
                 return
 
+            theme = self.theme
+
             def work():
                 out = os.path.join(self._tmpdir, f"{kind}.png")
-                reports.render_chart(kind, data, out)
+                reports.render_chart(kind, data, out, theme=theme)
                 return kind, data, out
 
             def done(payload):
@@ -821,37 +1032,35 @@ def build_app():
                 label_widget.configure(image="",
                                        text=f"(could not display chart: {ex})")
 
-        # ---- About
-        def _about(self):
-            win = ctk.CTkToplevel(self)
-            win.title("About BudgetBook")
-            win.resizable(False, False)
-            win.transient(self)
-            frm = ctk.CTkFrame(win, fg_color="transparent")
-            frm.pack(fill="both", expand=True, padx=20, pady=18)
-            aura.Heading(frm, APP_NAME).pack(anchor="w")
-            aura.Caption(frm, f"Version {APP_VERSION}").pack(
+        # ---- About section
+        def _panel_about(self, frame):
+            card = aura.Card(frame, title="About BudgetBook")
+            card.pack(fill="x")
+            aura.Heading(card.body, APP_NAME).pack(anchor="w")
+            aura.Caption(card.body, f"Version {APP_VERSION}").pack(
                 anchor="w", pady=(0, 10))
             ctk.CTkLabel(
-                frm, font=aura.font(), justify="left", anchor="w",
-                wraplength=400,
+                card.body, font=aura.font(), justify="left", anchor="w",
+                wraplength=560,
                 text="A fast, fully-offline personal-finance manager — "
                      "import bank CSV/OFX, budget by category, auto-"
                      "categorize and chart spending, cash flow and net "
                      "worth.\n\n100% AI-built, open source, published on "
                      "QuickOpen. Nothing is ever uploaded anywhere."
                 ).pack(anchor="w")
-            aura.Caption(frm,
+            aura.Caption(card.body,
+                         "Shortcuts: Ctrl+N add · Ctrl+F search · F2 edit · "
+                         "Delete remove · Ctrl+, settings · Ctrl+\\ "
+                         "sidebar").pack(anchor="w", pady=(10, 0))
+            aura.Caption(card.body,
                          "Licensed under Apache-2.0. Built on permissive "
                          "libraries: ofxparse, matplotlib, CustomTkinter.",
-                         wraplength=400, justify="left").pack(
+                         wraplength=560, justify="left").pack(
                 anchor="w", pady=(10, 4))
-            aura.AuraButton(frm, "Project page: quickopen.ai", kind="ghost",
+            aura.AuraButton(card.body, "Project page: quickopen.ai",
+                            kind="ghost",
                             command=lambda: open_with_default_app(
                                 PROJECT_URL)).pack(anchor="w", pady=(6, 0))
-            aura.AuraButton(frm, "Close", kind="secondary",
-                            command=win.destroy).pack(anchor="e", pady=(8, 0))
-            win.grab_set()
 
         def _on_close(self):
             try:

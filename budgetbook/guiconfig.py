@@ -15,7 +15,8 @@ import os
 APP_DIRNAME = "BudgetBook"
 CONFIG_NAME = "config.json"
 MAX_RECENT = 10
-VALID_THEMES = ("light", "dark")
+# "system" follows the OS Aura Dark/Light live (the fresh-install default).
+VALID_THEMES = ("system", "light", "dark")
 
 
 def config_dir():
@@ -23,6 +24,9 @@ def config_dir():
 
     ``%LOCALAPPDATA%\BudgetBook`` on Windows, ``~/.budgetbook`` otherwise.
     """
+    override = os.environ.get("BUDGETBOOK_HOME")
+    if override:
+        return override
     local = os.environ.get("LOCALAPPDATA")
     if local and os.name == "nt":
         return os.path.join(local, APP_DIRNAME)
@@ -34,7 +38,7 @@ def config_path():
 
 
 def _defaults():
-    return {"theme": "light", "recent": []}
+    return {"theme": "system", "recent": []}
 
 
 def load():
@@ -60,7 +64,7 @@ def save(cfg):
     try:
         os.makedirs(config_dir(), exist_ok=True)
         clean = {
-            "theme": cfg.get("theme") if cfg.get("theme") in VALID_THEMES else "light",
+            "theme": cfg.get("theme") if cfg.get("theme") in VALID_THEMES else "system",
             "recent": [p for p in cfg.get("recent", []) if isinstance(p, str)][:MAX_RECENT],
         }
         tmp = config_path() + ".tmp"
@@ -72,7 +76,7 @@ def save(cfg):
 
 
 def get_theme():
-    return load().get("theme", "light")
+    return load().get("theme", "system")
 
 
 def set_theme(theme):
